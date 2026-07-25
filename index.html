@@ -70,6 +70,8 @@
             font-size: 18px;
             color: #aaa;
             margin-bottom: 20px;
+            text-align: center;
+            max-width: 600px;
         }
         button {
             background: #ff3300;
@@ -108,7 +110,7 @@
 
     <div id="message-overlay">
         <h2 id="msg-title">MARS DESCENT MISSION</h2>
-        <p id="msg-desc">Safely touch down on the Martian surface. Keep vertical & horizontal speed under 5 m/s.</p>
+        <p id="msg-desc">Safely touch down on the Martian surface. Keep vertical & horizontal speed under 4 m/s.</p>
         <button id="start-btn" onclick="startGame()">INITIATE DESCENT</button>
     </div>
 
@@ -121,14 +123,14 @@
         let scene, camera, renderer, world;
         let landerMesh, landerBody, exhaustParticles;
         let terrainMesh;
-        let heightData = [];
+        
         const terrainSize = 200;
-        const terrainResolution = 64;
+        const terrainResolution = 32; // Grid resolution for heightfield matching
+        let matrix = [];
         
         let keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, KeyW: false, KeyS: false, KeyA: false, KeyD: false, Space: false };
         let gameActive = false;
         let fuel = 100;
-        let cameraMode = 'follow'; // follow, cockpit
 
         const uiAlt = document.getElementById('val-alt');
         const uiVSpeed = document.getElementById('val-vspeed');
@@ -174,28 +176,44 @@
             createLander();
 
             window.addEventListener('resize', onWindowResize);
+            animate();
         }
 
         function createProceduralTerrain() {
-            const geometry = new THREE.PlaneGeometry(terrainSize, terrainSize, terrainResolution, terrainResolution);
+            // Generate height matrix for Cannon heightfield & Three.js plane
+            matrix = [];
+            const sizeX = terrainResolution;
+            const sizeZ = terrainResolution;
+            
+            for (let i = 0; i < sizeX; i++) {
+                matrix.push([]);
+                for (let j = 0; j < sizeZ; j++) {
+                    const x = (i / (sizeX - 1) - 0.5) * terrainSize;
+                    const z = (j / (sizeZ - 1) - 0.5) * terrainSize;
+                    
+                    let y = Math.sin(x * 0.05) * Math.cos(z * 0.05) * 4.0;
+                    y += Math.sin(x * 0.02) * 8.0;
+                    
+                    // Flatten center landing zone
+                    const distFromCenter = Math.sqrt(x*x + z*z);
+                    if (distFromCenter < 30) {
+                        y *= (distFromCenter / 30);
+                    }
+                    matrix[i][j] = y;
+                }
+            }
+
+            // Three.js Visual Mesh matching resolution
+            const geometry = new THREE.PlaneGeometry(terrainSize, terrainSize, terrainResolution - 1, terrainResolution - 1);
             geometry.rotateX(-Math.PI / 2);
 
             const pos = geometry.attributes.position;
-            heightData = [];
-
-            for (let i = 0; i < pos.count; i++) {
-                const x = pos.getX(i);
-                const z = pos.getZ(i);
-                // Simple multi-octave pseudo-random noise simulation for craters and hills
-                let y = Math.sin(x * 0.05) * Math.cos(z * 0.05) * 4.0;
-                y += Math.sin(x * 0.02) * 8.0;
-                // Flatten the center landing zone
-                const distFromCenter = Math.sqrt(x*x + z*z);
-                if (distFromCenter < 25) {
-                    y *= (distFromCenter / 25);
+            let index = 0;
+            for (let i = 0; i < sizeX; i++) {
+                for (let j = 0; j < sizeZ; j++) {
+                    pos.setY(index, matrix[i][j]);
+                    index++;
                 }
-                pos.setY(i, y);
-                heightData.push(y);
             }
             geometry.computeVertexNormals();
 
@@ -210,21 +228,24 @@
             terrainMesh.receiveShadow = true;
             scene.add(terrainMesh);
 
-            // Add Cannon physics heightfield terrain
-            // For simplicity in standard setup, use a large flat body with bumps or a heightfield matrix
-            const groundBody = new CANNON.Body({
-                mass: 0, // static
-                shape: new CANNON.Plane()
+            // Cannon.js Heightfield Physics Body
+            const hfShape = new CANNON.Heightfield(matrix, {
+                elementSize: terrainSize / (terrainResolution - 1)
             });
-            groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
-            world.addBody(groundBody);
+            
+            const hfBody = new CANNON.Body({ mass: 0 }); // Static body
+            hfBody.addShape(hfShape);
+            
+            // Position the heightfield correctly relative to Three.js PlaneGeometry center positioning
+            hfBody.position.set(-terrainSize / 2, 0, terrainSize / 2);
+            hfBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+            world.addBody(hfBody);
         }
 
         function createLander() {
-            // Visual Lander Group
             landerMesh = new THREE.Group();
 
-            // Main Hull (Cone)
+            // Main Hull
             const hullGeo = new THREE.ConeGeometry(1.2, 2.2, 8);
             const hullMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.6, roughness: 0.3 });
             const hull = new THREE.Mesh(hullGeo, hullMat);
@@ -243,7 +264,7 @@
                 landerMesh.add(leg);
             }
 
-            // Thruster Exhaust Flame (Hidden initially)
+            // Thruster Exhaust Flame
             const exhaustGeo = new THREE.ConeGeometry(0.5, 2, 6);
             exhaustGeo.rotateX(Math.PI);
             const exhaustMat = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0 });
@@ -261,7 +282,7 @@
                 linearDamping: 0.1,
                 angularDamping: 0.4
             });
-            landerBody.position.set(0, 70, 0); // Start high up
+            landerBody.position.set(0, 50, 0); 
             world.addBody(landerBody);
         }
 
@@ -276,9 +297,8 @@
 
         function startGame() {
             overlay.classList.add('hidden');
-            // Reset position & velocity
-            landerBody.position.set((Math.random() - 0.5) * 40, 65, (Math.random() - 0.5) * 40);
-            landerBody.velocity.set(0, -5, 0);
+            landerBody.position.set((Math.random() - 0.5) * 20, 45, (Math.random() - 0.5) * 20);
+            landerBody.velocity.set(0, -4, 0);
             landerBody.angularVelocity.set(0, 0, 0);
             landerBody.quaternion.set(0, 0, 0, 1);
             fuel = 100;
@@ -293,34 +313,27 @@
             const delta = Math.min(clock.getDelta(), 0.1);
 
             if (gameActive) {
-                // Apply player controls & forces
                 handleFlightControls(delta);
-
-                // Step physics world
                 world.step(1 / 60, delta, 3);
 
-                // Sync Three.js mesh with Cannon.js body
                 landerMesh.position.copy(landerBody.position);
                 landerMesh.quaternion.copy(landerBody.quaternion);
 
-                // Calculate Telemetry Data
-                const altitude = Math.max(0, landerBody.position.y - getTerrainHeightAt(landerBody.position.x, landerBody.position.z) - 1.0);
+                const terrainHeight = getTerrainHeightAt(landerBody.position.x, landerBody.position.z);
+                const altitude = Math.max(0, landerBody.position.y - terrainHeight - 1.0);
                 const vSpeed = -landerBody.velocity.y;
                 const hSpeed = Math.sqrt(Math.pow(landerBody.velocity.x, 2) + Math.pow(landerBody.velocity.z, 2));
 
-                // Update HUD
                 uiAlt.innerText = altitude.toFixed(1);
                 uiVSpeed.innerText = vSpeed.toFixed(2);
                 uiHSpeed.innerText = hSpeed.toFixed(2);
                 uiFuel.innerText = Math.max(0, Math.floor(fuel));
 
-                // Camera Follow Position
                 const offset = new THREE.Vector3(0, 4, 10).applyQuaternion(landerMesh.quaternion);
                 camera.position.copy(landerMesh.position).add(offset);
                 camera.lookAt(landerMesh.position);
 
-                // Check landing conditions if close to ground
-                if (altitude < 0.5) {
+                if (altitude < 0.4) {
                     checkLandingOutcome(vSpeed, hSpeed);
                 }
             }
@@ -332,7 +345,6 @@
             const torque = 1500;
             const thrustPower = 7500;
 
-            // Pitch & Roll application using torques
             const localTorque = new CANNON.Vec3(0, 0, 0);
             if (keys.KeyW || keys.ArrowUp) localTorque.x -= torque * delta;
             if (keys.KeyS || keys.ArrowDown) localTorque.x += torque * delta;
@@ -341,11 +353,10 @@
 
             landerBody.applyLocalTorque(localTorque);
 
-            // Main Engine Thruster
-            if ((keys.Space) && fuel > 0) {
+            if (keys.Space && fuel > 0) {
                 const worldVector = new CANNON.Vec3(0, 1, 0);
                 landerBody.applyForce(worldVector.scale(thrustPower), landerBody.position);
-                fuel -= delta * 12; // drain fuel
+                fuel -= delta * 12;
                 exhaustParticles.material.opacity = 0.8;
                 exhaustParticles.scale.y = 1 + Math.random() * 0.5;
             } else {
@@ -354,11 +365,10 @@
         }
 
         function getTerrainHeightAt(x, z) {
-            // Simple analytical approximation of procedural terrain for altitude telemetry
             let y = Math.sin(x * 0.05) * Math.cos(z * 0.05) * 4.0;
             y += Math.sin(x * 0.02) * 8.0;
             const dist = Math.sqrt(x*x + z*z);
-            if (dist < 25) y *= (dist / 25);
+            if (dist < 30) y *= (dist / 30);
             return y;
         }
 
@@ -385,9 +395,6 @@
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         }
-
-        // Run Loop
-        animate();
     </script>
 </body>
 </html>
