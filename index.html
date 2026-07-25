@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mars Lander 3D - WebGL Game</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505;
+            font-family: 'Courier New', Courier, monospace;
+            user-select: none;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #ff3300;
+            text-shadow: 0 0 5px rgba(255, 50, 0, 0.5);
+            pointer-events: none;
+            font-size: 16px;
+            line-height: 1.5;
+        }
+        #ui h1 {
+            margin: 0 0 10px 0;
+            font-size: 22px;
+            letter-spacing: 2px;
+            color: #ff5522;
+        }
+        .telemetry-row {
+            display: flex;
+            justify-content: space-between;
+            width: 260px;
+            background: rgba(20, 5, 0, 0.6);
+            padding: 4px 8px;
+            border-left: 3px solid #ff3300;
+            margin-bottom: 4px;
+        }
+        #controls-hint {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            text-align: center;
+            color: #d88;
+            font-size: 14px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+            pointer-events: none;
+        }
+        #message-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.85);
+            color: white;
+            transition: opacity 0.5s;
+        }
+        #message-overlay h2 {
+            font-size: 40px;
+            margin-bottom: 10px;
+            letter-spacing: 3px;
+        }
+        #message-overlay p {
+            font-size: 18px;
+            color: #aaa;
+            margin-bottom: 20px;
+        }
+        button {
+            background: #ff3300;
+            border: none;
+            color: white;
+            padding: 12px 28px;
+            font-size: 16px;
+            font-family: 'Courier New', Courier, monospace;
+            font-weight: bold;
+            cursor: pointer;
+            letter-spacing: 1px;
+            box-shadow: 0 0 15px rgba(255, 51, 0, 0.4);
+            transition: background 0.2s;
+        }
+        button:hover {
+            background: #ff5522;
+        }
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        <h1>EDL TELEMETRY</h1>
+        <div class="telemetry-row"><span>ALTITUDE:</span> <span id="val-alt">0.00</span>m</div>
+        <div class="telemetry-row"><span>VERT SPEED:</span> <span id="val-vspeed">0.00</span>m/s</div>
+        <div class="telemetry-row"><span>HORIZ SPEED:</span> <span id="val-hspeed">0.00</span>m/s</div>
+        <div class="telemetry-row"><span>FUEL:</span> <span id="val-fuel">100</span>%</div>
+    </div>
+
+    <div id="controls-hint">
+        <b>W / S</b>: Pitch Forward/Back | <b>A / D</b>: Roll Left/Right | <b>SPACEBAR</b>: Main Thruster
+    </div>
+
+    <div id="message-overlay">
+        <h2 id="msg-title">MARS DESCENT MISSION</h2>
+        <p id="msg-desc">Safely touch down on the Martian surface. Keep vertical & horizontal speed under 5 m/s.</p>
+        <button id="start-btn" onclick="startGame()">INITIATE DESCENT</button>
+    </div>
+
+    <!-- Include Three.js and Cannon.js via CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+
+    <script>
+        // Game State Variables
+        let scene, camera, renderer, world;
+        let landerMesh, landerBody, exhaustParticles;
+        let terrainMesh;
+        let heightData = [];
+        const terrainSize = 200;
+        const terrainResolution = 64;
+        
+        let keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, KeyW: false, KeyS: false, KeyA: false, KeyD: false, Space: false };
+        let gameActive = false;
+        let fuel = 100;
+        let cameraMode = 'follow'; // follow, cockpit
+
+        const uiAlt = document.getElementById('val-alt');
+        const uiVSpeed = document.getElementById('val-vspeed');
+        const uiHSpeed = document.getElementById('val-hspeed');
+        const uiFuel = document.getElementById('val-fuel');
+        const overlay = document.getElementById('message-overlay');
+        const msgTitle = document.getElementById('msg-title');
+        const msgDesc = document.getElementById('msg-desc');
+        const startBtn = document.getElementById('start-btn');
+
+        initPhysicsAndGraphics();
+        setupKeyboardControls();
+
+        function initPhysicsAndGraphics() {
+            // 1. Scene Setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a0500);
+            scene.fog = new THREE.FogExp2(0x3a1005, 0.008);
+
+            // 2. Camera Setup
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+            // 3. Renderer Setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            // 4. Lighting
+            const ambientLight = new THREE.AmbientLight(0xffaa88, 0.4);
+            scene.add(ambientLight);
+
+            const sunLight = new THREE.DirectionalLight(0xffeedd, 0.9);
+            sunLight.position.set(100, 150, 50);
+            sunLight.castShadow = true;
+            scene.add(sunLight);
+
+            // 5. Physics World (Cannon.js)
+            world = new CANNON.World();
+            world.gravity.set(0, -3.72, 0); // Martian gravity (~0.38g)
+
+            createProceduralTerrain();
+            createLander();
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function createProceduralTerrain() {
+            const geometry = new THREE.PlaneGeometry(terrainSize, terrainSize, terrainResolution, terrainResolution);
+            geometry.rotateX(-Math.PI / 2);
+
+            const pos = geometry.attributes.position;
+            heightData = [];
+
+            for (let i = 0; i < pos.count; i++) {
+                const x = pos.getX(i);
+                const z = pos.getZ(i);
+                // Simple multi-octave pseudo-random noise simulation for craters and hills
+                let y = Math.sin(x * 0.05) * Math.cos(z * 0.05) * 4.0;
+                y += Math.sin(x * 0.02) * 8.0;
+                // Flatten the center landing zone
+                const distFromCenter = Math.sqrt(x*x + z*z);
+                if (distFromCenter < 25) {
+                    y *= (distFromCenter / 25);
+                }
+                pos.setY(i, y);
+                heightData.push(y);
+            }
+            geometry.computeVertexNormals();
+
+            const material = new THREE.MeshStandardMaterial({
+                color: 0xa13a1a,
+                roughness: 0.9,
+                metalness: 0.1,
+                flatShading: true
+            });
+
+            terrainMesh = new THREE.Mesh(geometry, material);
+            terrainMesh.receiveShadow = true;
+            scene.add(terrainMesh);
+
+            // Add Cannon physics heightfield terrain
+            // For simplicity in standard setup, use a large flat body with bumps or a heightfield matrix
+            const groundBody = new CANNON.Body({
+                mass: 0, // static
+                shape: new CANNON.Plane()
+            });
+            groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+            world.addBody(groundBody);
+        }
+
+        function createLander() {
+            // Visual Lander Group
+            landerMesh = new THREE.Group();
+
+            // Main Hull (Cone)
+            const hullGeo = new THREE.ConeGeometry(1.2, 2.2, 8);
+            const hullMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.6, roughness: 0.3 });
+            const hull = new THREE.Mesh(hullGeo, hullMat);
+            hull.position.y = 1.1;
+            hull.castShadow = true;
+            landerMesh.add(hull);
+
+            // Landing Legs
+            const legMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            for (let i = 0; i < 4; i++) {
+                const angle = (i * Math.PI) / 2;
+                const legGeo = new THREE.CylinderGeometry(0.05, 0.05, 1.8, 4);
+                const leg = new THREE.Mesh(legGeo, legMat);
+                leg.rotation.z = Math.PI / 6 * (i % 2 === 0 ? 1 : -1);
+                leg.position.set(Math.cos(angle) * 0.8, 0.4, Math.sin(angle) * 0.8);
+                landerMesh.add(leg);
+            }
+
+            // Thruster Exhaust Flame (Hidden initially)
+            const exhaustGeo = new THREE.ConeGeometry(0.5, 2, 6);
+            exhaustGeo.rotateX(Math.PI);
+            const exhaustMat = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0 });
+            exhaustParticles = new THREE.Mesh(exhaustGeo, exhaustMat);
+            exhaustParticles.position.y = -0.5;
+            landerMesh.add(exhaustParticles);
+
+            scene.add(landerMesh);
+
+            // Physics Body for Lander
+            const shape = new CANNON.Box(new CANNON.Vec3(1, 1.2, 1));
+            landerBody = new CANNON.Body({
+                mass: 800,
+                shape: shape,
+                linearDamping: 0.1,
+                angularDamping: 0.4
+            });
+            landerBody.position.set(0, 70, 0); // Start high up
+            world.addBody(landerBody);
+        }
+
+        function setupKeyboardControls() {
+            window.addEventListener('keydown', (e) => {
+                if (keys.hasOwnProperty(e.code)) keys[e.code] = true;
+            });
+            window.addEventListener('keyup', (e) => {
+                if (keys.hasOwnProperty(e.code)) keys[e.code] = false;
+            });
+        }
+
+        function startGame() {
+            overlay.classList.add('hidden');
+            // Reset position & velocity
+            landerBody.position.set((Math.random() - 0.5) * 40, 65, (Math.random() - 0.5) * 40);
+            landerBody.velocity.set(0, -5, 0);
+            landerBody.angularVelocity.set(0, 0, 0);
+            landerBody.quaternion.set(0, 0, 0, 1);
+            fuel = 100;
+            gameActive = true;
+        }
+
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const delta = Math.min(clock.getDelta(), 0.1);
+
+            if (gameActive) {
+                // Apply player controls & forces
+                handleFlightControls(delta);
+
+                // Step physics world
+                world.step(1 / 60, delta, 3);
+
+                // Sync Three.js mesh with Cannon.js body
+                landerMesh.position.copy(landerBody.position);
+                landerMesh.quaternion.copy(landerBody.quaternion);
+
+                // Calculate Telemetry Data
+                const altitude = Math.max(0, landerBody.position.y - getTerrainHeightAt(landerBody.position.x, landerBody.position.z) - 1.0);
+                const vSpeed = -landerBody.velocity.y;
+                const hSpeed = Math.sqrt(Math.pow(landerBody.velocity.x, 2) + Math.pow(landerBody.velocity.z, 2));
+
+                // Update HUD
+                uiAlt.innerText = altitude.toFixed(1);
+                uiVSpeed.innerText = vSpeed.toFixed(2);
+                uiHSpeed.innerText = hSpeed.toFixed(2);
+                uiFuel.innerText = Math.max(0, Math.floor(fuel));
+
+                // Camera Follow Position
+                const offset = new THREE.Vector3(0, 4, 10).applyQuaternion(landerMesh.quaternion);
+                camera.position.copy(landerMesh.position).add(offset);
+                camera.lookAt(landerMesh.position);
+
+                // Check landing conditions if close to ground
+                if (altitude < 0.5) {
+                    checkLandingOutcome(vSpeed, hSpeed);
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function handleFlightControls(delta) {
+            const torque = 1500;
+            const thrustPower = 7500;
+
+            // Pitch & Roll application using torques
+            const localTorque = new CANNON.Vec3(0, 0, 0);
+            if (keys.KeyW || keys.ArrowUp) localTorque.x -= torque * delta;
+            if (keys.KeyS || keys.ArrowDown) localTorque.x += torque * delta;
+            if (keys.KeyA || keys.ArrowLeft) localTorque.z += torque * delta;
+            if (keys.KeyD || keys.ArrowRight) localTorque.z -= torque * delta;
+
+            landerBody.applyLocalTorque(localTorque);
+
+            // Main Engine Thruster
+            if ((keys.Space) && fuel > 0) {
+                const worldVector = new CANNON.Vec3(0, 1, 0);
+                landerBody.applyForce(worldVector.scale(thrustPower), landerBody.position);
+                fuel -= delta * 12; // drain fuel
+                exhaustParticles.material.opacity = 0.8;
+                exhaustParticles.scale.y = 1 + Math.random() * 0.5;
+            } else {
+                exhaustParticles.material.opacity = 0;
+            }
+        }
+
+        function getTerrainHeightAt(x, z) {
+            // Simple analytical approximation of procedural terrain for altitude telemetry
+            let y = Math.sin(x * 0.05) * Math.cos(z * 0.05) * 4.0;
+            y += Math.sin(x * 0.02) * 8.0;
+            const dist = Math.sqrt(x*x + z*z);
+            if (dist < 25) y *= (dist / 25);
+            return y;
+        }
+
+        function checkLandingOutcome(vSpeed, hSpeed) {
+            gameActive = false;
+            exhaustParticles.material.opacity = 0;
+            overlay.classList.remove('hidden');
+
+            if (vSpeed < 4.0 && hSpeed < 3.0) {
+                msgTitle.innerText = "SUCCESSFUL TOUCHDOWN!";
+                msgTitle.style.color = "#00ff88";
+                msgDesc.innerText = `Great job, Commander! You landed safely.\nDescent Rate: ${vSpeed.toFixed(2)} m/s`;
+                startBtn.innerText = "LAND AGAIN";
+            } else {
+                msgTitle.innerText = "CRASH LANDING!";
+                msgTitle.style.color = "#ff3300";
+                msgDesc.innerText = `Impact velocity too high!\nVertical: ${vSpeed.toFixed(2)} m/s (Limit: 4.0)\nHorizontal: ${hSpeed.toFixed(2)} m/s (Limit: 3.0)`;
+                startBtn.innerText = "RETRY MISSION";
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Run Loop
+        animate();
+    </script>
+</body>
+</html>
