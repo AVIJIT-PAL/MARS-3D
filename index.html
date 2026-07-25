@@ -119,13 +119,12 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
 
     <script>
-        // Game State Variables
         let scene, camera, renderer, world;
         let landerMesh, landerBody, exhaustParticles;
         let terrainMesh;
         
         const terrainSize = 200;
-        const terrainResolution = 32; // Grid resolution for heightfield matching
+        const terrainResolution = 32; 
         let matrix = [];
         
         let keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, KeyW: false, KeyS: false, KeyA: false, KeyD: false, Space: false };
@@ -145,21 +144,17 @@
         setupKeyboardControls();
 
         function initPhysicsAndGraphics() {
-            // 1. Scene Setup
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x1a0500);
             scene.fog = new THREE.FogExp2(0x3a1005, 0.008);
 
-            // 2. Camera Setup
             camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
 
-            // 3. Renderer Setup
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.shadowMap.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            // 4. Lighting
             const ambientLight = new THREE.AmbientLight(0xffaa88, 0.4);
             scene.add(ambientLight);
 
@@ -168,19 +163,19 @@
             sunLight.castShadow = true;
             scene.add(sunLight);
 
-            // 5. Physics World (Cannon.js)
             world = new CANNON.World();
-            world.gravity.set(0, -3.72, 0); // Martian gravity (~0.38g)
+            world.gravity.set(0, -3.72, 0);
 
             createProceduralTerrain();
             createLander();
 
             window.addEventListener('resize', onWindowResize);
+            
+            // Start render loop immediately so screen is active
             animate();
         }
 
         function createProceduralTerrain() {
-            // Generate height matrix for Cannon heightfield & Three.js plane
             matrix = [];
             const sizeX = terrainResolution;
             const sizeZ = terrainResolution;
@@ -194,7 +189,6 @@
                     let y = Math.sin(x * 0.05) * Math.cos(z * 0.05) * 4.0;
                     y += Math.sin(x * 0.02) * 8.0;
                     
-                    // Flatten center landing zone
                     const distFromCenter = Math.sqrt(x*x + z*z);
                     if (distFromCenter < 30) {
                         y *= (distFromCenter / 30);
@@ -203,7 +197,6 @@
                 }
             }
 
-            // Three.js Visual Mesh matching resolution
             const geometry = new THREE.PlaneGeometry(terrainSize, terrainSize, terrainResolution - 1, terrainResolution - 1);
             geometry.rotateX(-Math.PI / 2);
 
@@ -228,15 +221,12 @@
             terrainMesh.receiveShadow = true;
             scene.add(terrainMesh);
 
-            // Cannon.js Heightfield Physics Body
             const hfShape = new CANNON.Heightfield(matrix, {
                 elementSize: terrainSize / (terrainResolution - 1)
             });
             
-            const hfBody = new CANNON.Body({ mass: 0 }); // Static body
+            const hfBody = new CANNON.Body({ mass: 0 });
             hfBody.addShape(hfShape);
-            
-            // Position the heightfield correctly relative to Three.js PlaneGeometry center positioning
             hfBody.position.set(-terrainSize / 2, 0, terrainSize / 2);
             hfBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
             world.addBody(hfBody);
@@ -245,7 +235,6 @@
         function createLander() {
             landerMesh = new THREE.Group();
 
-            // Main Hull
             const hullGeo = new THREE.ConeGeometry(1.2, 2.2, 8);
             const hullMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.6, roughness: 0.3 });
             const hull = new THREE.Mesh(hullGeo, hullMat);
@@ -253,7 +242,6 @@
             hull.castShadow = true;
             landerMesh.add(hull);
 
-            // Landing Legs
             const legMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
             for (let i = 0; i < 4; i++) {
                 const angle = (i * Math.PI) / 2;
@@ -264,7 +252,6 @@
                 landerMesh.add(leg);
             }
 
-            // Thruster Exhaust Flame
             const exhaustGeo = new THREE.ConeGeometry(0.5, 2, 6);
             exhaustGeo.rotateX(Math.PI);
             const exhaustMat = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0 });
@@ -274,7 +261,6 @@
 
             scene.add(landerMesh);
 
-            // Physics Body for Lander
             const shape = new CANNON.Box(new CANNON.Vec3(1, 1.2, 1));
             landerBody = new CANNON.Body({
                 mass: 800,
@@ -336,6 +322,11 @@
                 if (altitude < 0.4) {
                     checkLandingOutcome(vSpeed, hSpeed);
                 }
+            } else {
+                // Idle camera spin when waiting in menu
+                const timer = Date.now() * 0.0005;
+                camera.position.set(Math.cos(timer) * 40, 25, Math.sin(timer) * 40);
+                camera.lookAt(0, 5, 0);
             }
 
             renderer.render(scene, camera);
